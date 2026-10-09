@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { Payment } from "@/data/types"
-import { EXPORT_COLUMNS, exportFilename, toCsv } from "./csv"
+import {
+  DEFAULT_EXPORT_COLUMNS,
+  EXPORT_COLUMNS,
+  exportFilename,
+  parseColumns,
+  toCsv,
+} from "./csv"
 
 /**
  * The export is the file ops hands to a merchant, so a broken cell is a
@@ -26,7 +32,7 @@ describe("toCsv", () => {
   it("writes a header row followed by one row per payment", () => {
     const lines = toCsv([payment]).split("\n")
     expect(lines).toHaveLength(2)
-    expect(lines[0]).toBe(EXPORT_COLUMNS.join(","))
+    expect(lines[0]).toBe(DEFAULT_EXPORT_COLUMNS.join(","))
   })
 
   it("writes only the requested columns, in the order given", () => {
@@ -71,15 +77,71 @@ describe("toCsv", () => {
     )
   })
 
+  it("writes a subset of columns in the order requested, not table order", () => {
+    expect(toCsv([payment], ["amount", "id", "status"])).toBe(
+      ["amount,id,status", "$250.00,pay_0001,captured"].join("\n"),
+    )
+  })
+
+  it("excludes the card last four by default", () => {
+    const header = toCsv([payment]).split("\n")[0].split(",")
+    expect(header).not.toContain("last4")
+    expect(toCsv([payment])).not.toContain("4242")
+    expect(header).toEqual(EXPORT_COLUMNS.filter((c) => c !== "last4"))
+  })
+
   it("emits a header even with no rows", () => {
     expect(toCsv([], ["id"])).toBe("id")
   })
 })
 
+describe("parseColumns", () => {
+  it("falls back to the defaults, without last4, when no columns are given", () => {
+    expect(parseColumns(null)).toEqual({
+      ok: true,
+      columns: [...DEFAULT_EXPORT_COLUMNS],
+    })
+  })
+
+  it("keeps a subset in the requested order and drops duplicates", () => {
+    expect(parseColumns("amount,id,amount,currency")).toEqual({
+      ok: true,
+      columns: ["amount", "id", "currency"],
+    })
+  })
+
+  it("allows last4 only when it is asked for explicitly", () => {
+    expect(parseColumns("id,last4")).toEqual({
+      ok: true,
+      columns: ["id", "last4"],
+    })
+  })
+
+  it("rejects an empty selection rather than producing an empty file", () => {
+    for (const raw of ["", " , ,"]) {
+      expect(parseColumns(raw)).toEqual({
+        ok: false,
+        message: "Select at least one column to export.",
+      })
+    }
+  })
+
+  it("rejects names outside the allowlist", () => {
+    const result = parseColumns("id,card_number; DROP TABLE payments")
+    expect(result.ok).toBe(false)
+  })
+})
+
 describe("exportFilename", () => {
   it("stamps the UTC date, so two exports on the same day collide by design", () => {
-    expect(exportFilename(new Date("2026-03-14T23:00:00.000Z"))).toBe(
-      "payments-2026-03-14.csv",
+    expect(exportFilename("all", new Date("2026-03-14T23:00:00.000Z"))).toBe(
+      "payments-all-2026-03-14.csv",
     )
+  })
+
+  it("puts the scope in the name", () => {
+    expect(
+      exportFilename("disputed", new Date("2026-08-13T09:00:00.000Z")),
+    ).toBe("payments-disputed-2026-08-13.csv")
   })
 })

@@ -5,9 +5,8 @@ import { formatMoney } from "./money"
 /**
  * CSV export for the payments table.
  *
- * The column set is fixed. Ops has asked for control over it — that is
- * NWP-101 — but today everyone gets every column, including the card
- * last four, whether or not the file is going to a merchant.
+ * Callers choose the columns (validated by parseColumns). The default set
+ * leaves out the card last four.
  */
 
 export const EXPORT_COLUMNS = [
@@ -24,6 +23,42 @@ export const EXPORT_COLUMNS = [
 ] as const
 
 export type ExportColumn = (typeof EXPORT_COLUMNS)[number]
+
+/** Card last four is opt-in: files go to merchants, so it is off unless asked for. */
+export const DEFAULT_EXPORT_COLUMNS: readonly ExportColumn[] =
+  EXPORT_COLUMNS.filter((column) => column !== "last4")
+
+export type ParsedColumns =
+  | { ok: true; columns: ExportColumn[] }
+  | { ok: false; message: string }
+
+/**
+ * Turns the client's comma-separated `columns` param into an allowlisted,
+ * ordered, de-duplicated list. An absent param means the defaults; a present
+ * but empty one is an error, never an empty file.
+ */
+export function parseColumns(raw: string | null): ParsedColumns {
+  if (raw === null) return { ok: true, columns: [...DEFAULT_EXPORT_COLUMNS] }
+
+  const requested = raw
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+  if (requested.length === 0) {
+    return { ok: false, message: "Select at least one column to export." }
+  }
+
+  const allowed: readonly string[] = EXPORT_COLUMNS
+  const unknown = requested.filter((name) => !allowed.includes(name))
+  if (unknown.length > 0) {
+    return { ok: false, message: `Unknown column: ${unknown[0]}` }
+  }
+
+  return {
+    ok: true,
+    columns: [...new Set(requested)] as ExportColumn[],
+  }
+}
 
 function escapeCell(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`
@@ -57,7 +92,7 @@ function cell(payment: Payment, column: ExportColumn): string {
 
 export function toCsv(
   payments: Payment[],
-  columns: readonly ExportColumn[] = EXPORT_COLUMNS,
+  columns: readonly ExportColumn[] = DEFAULT_EXPORT_COLUMNS,
 ): string {
   const header = columns.join(",")
   const rows = payments.map((payment) =>
@@ -66,6 +101,7 @@ export function toCsv(
   return [header, ...rows].join("\n")
 }
 
-export function exportFilename(date = new Date()): string {
-  return `payments-${date.toISOString().slice(0, 10)}.csv`
+/** `scope` must be an allowlisted label (a status or "all"), never raw input. */
+export function exportFilename(scope = "all", date = new Date()): string {
+  return `payments-${scope}-${date.toISOString().slice(0, 10)}.csv`
 }
